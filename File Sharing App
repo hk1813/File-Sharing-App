@@ -1,0 +1,188 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from tkinter import simpledialog
+import os
+import hashlib
+import base64
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
+
+class FileSharingApp:
+    def __init__(self, master):
+        self.master = master
+        master.title("File Sharing App")
+
+        # File list
+        self.file_listbox = tk.Listbox(master)
+        self.file_listbox.pack()
+
+        # Buttons
+        self.upload_button = tk.Button(master, text="Upload", command=self.upload_file)
+        self.upload_button.pack()
+
+        self.download_button = tk.Button(master, text="Download", command=self.download_file)
+        self.download_button.pack()
+
+        self.delete_button = tk.Button(master, text="Delete", command=self.delete_file)
+        self.delete_button.pack()
+
+        # File server directory
+        self.server_directory = "files"
+        if not os.path.exists(self.server_directory):
+            os.makedirs(self.server_directory)
+
+        # Populate file list
+        self.update_file_list()
+
+    def update_file_list(self):
+        self.file_listbox.delete(0, tk.END)
+        for file_name in os.listdir(self.server_directory):
+            self.file_listbox.insert(tk.END, file_name)
+
+    def upload_file(self):
+        # User authentication
+        if not self.authenticate():
+            return
+
+        file_path = filedialog.askopenfilename()
+        if file_path:
+            file_name = os.path.basename(file_path)
+            destination = os.path.join(self.server_directory, file_name)
+            try:
+                # Encrypt file before uploading
+                self.encrypt_file(file_path, destination)
+                messagebox.showinfo("Success", "File uploaded successfully.")
+                self.update_file_list()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to upload file: {str(e)}")
+
+    def download_file(self):
+        # User authentication
+        if not self.authenticate():
+            return
+
+        selected_index = self.file_listbox.curselection()
+        if selected_index:
+            file_name = self.file_listbox.get(selected_index)
+            source = os.path.join(self.server_directory, file_name)
+            destination = filedialog.asksaveasfilename(initialfile=file_name)
+            if destination:
+                try:
+                    # Decrypt file after downloading
+                    self.decrypt_file(source, destination)
+                    messagebox.showinfo("Success", "File downloaded successfully.")
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to download file: {str(e)}")
+
+    def delete_file(self):
+        # User authentication
+        if not self.authenticate():
+            return
+
+        selected_index = self.file_listbox.curselection()
+        if selected_index:
+            file_name = self.file_listbox.get(selected_index)
+            source = os.path.join(self.server_directory, file_name)
+            try:
+                # Delete file from server
+                os.remove(source)
+                messagebox.showinfo("Success", "File deleted successfully.")
+                self.update_file_list()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to delete file: {str(e)}")
+
+    def authenticate(self):
+        # Mock authentication, replace with actual authentication mechanism
+        password = "12345678"
+        entered_password = simpledialog.askstring("Password", "Enter your password:", show="*")
+        if entered_password == password:
+            return True
+        else:
+            messagebox.showerror("Authentication Failed", "Incorrect password!")
+            return False
+
+    def encrypt_file(self, file_path, destination):
+        # Generate encryption key
+        key = get_random_bytes(16)
+        cipher = AES.new(key, AES.MODE_EAX)
+
+        with open(file_path, "rb") as file:
+            plaintext = file.read()
+        
+        ciphertext, tag = cipher.encrypt_and_digest(plaintext)
+
+        with open(destination, "wb") as file:
+            [file.write(x) for x in (cipher.nonce, tag, ciphertext)]
+
+    def decrypt_file(self, source, destination):
+        with open(source, "rb") as file:
+            nonce, tag, ciphertext = [file.read(x) for x in (16, 16, -1)]
+        
+        # Mock decryption key, replace with actual decryption key management
+        key = get_random_bytes(16)
+        cipher = AES.new(key, AES.MODE_EAX, nonce)
+
+        plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+
+        with open(destination, "wb") as file:
+            file.write(plaintext)
+
+
+root = tk.Tk()
+app = FileSharingApp(root)
+root.mainloop()
+
+
+######
+
+import socket
+import os
+import shutil
+
+# Server configuration
+HOST = '127.0.0.1'
+PORT = 12345
+SERVER_DIRECTORY = "server_files"
+
+def handle_client_connection(client_socket):
+    while True:
+        request = client_socket.recv(1024).decode('utf-8')
+        if request.startswith('UPLOAD'):
+            # Handle file upload
+            file_name = request.split()[1]
+            save_path = os.path.join(SERVER_DIRECTORY, file_name)
+            with open(save_path, 'wb') as f:
+                while True:
+                    data = client_socket.recv(1024)
+                    if not data:
+                        break
+                    f.write(data)
+            print(f"File '{file_name}' uploaded successfully.")
+            client_socket.sendall(b"File uploaded successfully.")
+        elif request.startswith('DOWNLOAD'):
+            # Handle file download
+            file_name = request.split()[1]
+            file_path = os.path.join(SERVER_DIRECTORY, file_name)
+            if os.path.exists(file_path):
+                with open(file_path, 'rb') as f:
+                    data = f.read()
+                client_socket.sendall(data)
+                print(f"File '{file_name}' sent to client.")
+            else:
+                client_socket.sendall(b"File not found on server.")
+        elif request.startswith('LIST'):
+            # Handle file list request
+            files = os.listdir(SERVER_DIRECTORY)
+            files_str = '\n'.join(files)
+            client_socket.sendall(files_str.encode('utf-8'))
+        elif request.startswith('DELETE'):
+            # Handle file deletion
+            file_name = request.split()[1]
+            file_path = os.path.join(SERVER_DIRECTORY, file_name)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print(f"File '{file_name}' deleted.")
+                client_socket.sendall(b"File deleted successfully.")
+            else:
+                client_socket.sendall(b"File not found on server.")
+
